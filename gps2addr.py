@@ -3,16 +3,20 @@
 gps2addr — Convert GPS coordinates (DMS or decimal) to a human-readable address.
 
 Usage:
+  python gps2addr.py photo.jpg                            ← lit directement le fichier
   python gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\""
   python gps2addr.py "48 deg 51' 30\" N, 2 deg 17' 40\" E"
   python gps2addr.py --lat 26.204100 --lon 28.047300
   python gps2addr.py --lat 26.204100 --lon 28.047300 --lat-ref S --lon-ref E
+  exiftool -n -GPSLatitude -GPSLongitude photo.jpg | python gps2addr.py
   exiftool -p "$GPSLatitude, $GPSLongitude" photo.jpg | python gps2addr.py
 """
 
 import sys
 import re
+import os
 import argparse
+import subprocess
 import urllib.request
 import urllib.parse
 import json
@@ -60,6 +64,101 @@ def print_banner():
 
 SEP  = f"{C.GRAY}  {'─' * 62}{C.RESET}"
 SEP2 = f"{C.GRAY}  {'═' * 62}{C.RESET}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EXIFTOOL INTEGRATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def read_gps_from_image(path: str):
+    """
+    Appelle exiftool -n sur le fichier image pour lire les coordonnées GPS
+    en décimal (pas de DMS, pas de caractères spéciaux).
+    Retourne (lat, lon, lat_has_ref, lon_has_ref).
+    """
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Fichier introuvable : {path!r}")
+
+    try:
+        result = subprocess.run(
+            ["exiftool", "-n",
+             "-GPSLatitude", "-GPSLongitude",
+             "-GPSLatitudeRef", "-GPSLongitudeRef",
+             path],
+            capture_output=True, text=True, check=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "exiftool n'est pas installé ou introuvable dans le PATH.\n"
+            "  → sudo apt install exiftool  (Debian/Ubuntu/Kali)\n"
+            "  → brew install exiftool       (macOS)"
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"exiftool a échoué : {e.stderr.strip()}")
+
+    values = {}
+    for line in result.stdout.splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            values[key.strip().lower().replace(" ", "")] = val.strip()
+
+    lat_key = next((k for k in values if "latitude" in k and "ref" not in k), None)
+    lon_key = next((k for k in values if "longitude" in k and "ref" not in k), None)
+    lat_ref_key = next((k for k in values if "latituderef" in k), None)
+    lon_ref_key = next((k for k in values if "longituderef" in k), None)
+
+    if lat_key is None or lon_key is None:
+        raise ValueError(
+            f"Aucune coordonnée GPS trouvée dans {path!r}.\n"
+            "  Vérifiez que l'image contient des métadonnées GPS."
+        )
+
+    try:
+        lat = float(values[lat_key])
+        lon = float(values[lon_key])
+    except ValueError:
+        raise ValueError(f"Coordonnées GPS illisibles : lat={values.get(lat_key)!r}, lon={values.get(lon_key)!r}")
+
+    lat_ref = (values.get(lat_ref_key, "") or "").strip().upper()
+    lon_ref = (values.get(lon_ref_key, "") or "").strip().upper()
+
+    if lat_ref == "S":
+        lat = -abs(lat)
+    elif lat_ref == "N":
+        lat = +abs(lat)
+
+    if lon_ref == "W":
+        lon = -abs(lon)
+    elif lon_ref == "E":
+        lon = +abs(lon)
+
+    return lat, lon, lat_ref in ("N", "S"), lon_ref in ("E", "W")
+
+
+def parse_exiftool_decimal_pipe(text: str):
+    """
+    Parse la sortie de :  exiftool -n -GPSLatitude -GPSLongitude photo.jpg
+    Exemple :
+        GPS Latitude                    : 26.2041
+        GPS Longitude                   : 28.0475
+    Retourne (lat, lon, False, False) — refs inconnues depuis ce mode.
+    """
+    values = {}
+    for line in text.splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            k = key.strip().lower().replace(" ", "")
+            try:
+                values[k] = float(val.strip())
+            except ValueError:
+                pass
+
+    lat_key = next((k for k in values if "latitude" in k and "ref" not in k), None)
+    lon_key = next((k for k in values if "longitude" in k and "ref" not in k), None)
+
+    if lat_key and lon_key:
+        return values[lat_key], values[lon_key], False, False
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -218,10 +317,6 @@ def print_ambiguous(abs_lat, abs_lon, lang):
             f"{C.GRAY}{lt:+.6f}°,  {ln:+.6f}°{C.RESET}"
         )
         print(f"  {C.GRAY}│{C.RESET}")
-        # indent result lines under the box
-        old_print = __builtins__.__dict__.get("print") if hasattr(__builtins__, "__dict__") else None
-
-        # Capture output with a simple prefix trick
         import io, contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -267,13 +362,16 @@ def build_parser():
         description="Convert GPS DMS coordinates to a postal address.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
+  python gps2addr.py photo.jpg                            ← image directement
   python gps2addr.py "26 deg 12' 14.76\\", 28 deg 2' 50.28\\""
   python gps2addr.py "48 deg 51' 30\\" N, 2 deg 17' 40\\" E"
   python gps2addr.py --lat 26.2041 --lon 28.0473 --lat-ref S --lon-ref E
+  exiftool -n -GPSLatitude -GPSLongitude photo.jpg | python gps2addr.py
   exiftool -p "$GPSLatitude, $GPSLongitude" photo.jpg | python gps2addr.py
         """,
     )
-    p.add_argument("coords",    nargs="?", help="DMS coordinate string")
+    p.add_argument("coords",    nargs="?",
+                   help="Fichier image, coordonnées DMS, ou omis pour lire stdin")
     p.add_argument("--lat",     type=float)
     p.add_argument("--lon",     type=float)
     p.add_argument("--lat-ref", choices=["N","S","n","s"], help="Force N or S hemisphere")
@@ -296,24 +394,42 @@ def main():
     lat_has_ref = lon_has_ref = False
 
     try:
+        # ── Priorité 1 : --lat / --lon explicites ──────────────────────────
         if args.lat is not None and args.lon is not None:
             lat, lon = args.lat, args.lon
             lat_has_ref = args.lat_ref is not None
             lon_has_ref = args.lon_ref is not None
+
+        # ── Priorité 2 : argument positionnel ─────────────────────────────
+        elif args.coords is not None:
+            # Fichier image → exiftool -n
+            if os.path.isfile(args.coords):
+                print(f"  {C.GRAY}Lecture des métadonnées GPS via exiftool : {args.coords}{C.RESET}\n")
+                lat, lon, lat_has_ref, lon_has_ref = read_gps_from_image(args.coords)
+            else:
+                # Chaîne DMS classique
+                lat, lon, lat_has_ref, lon_has_ref = parse_dms(args.coords)
+
+        # ── Priorité 3 : stdin ─────────────────────────────────────────────
         else:
-            raw = args.coords
-            if raw is None:
-                if not sys.stdin.isatty():
-                    raw = sys.stdin.read().strip()
-                else:
-                    parser.print_help()
-                    sys.exit(1)
-            lat, lon, lat_has_ref, lon_has_ref = parse_dms(raw)
-    except ValueError as e:
+            if sys.stdin.isatty():
+                parser.print_help()
+                sys.exit(1)
+            raw = sys.stdin.read().strip()
+
+            # Essai : sortie exiftool -n (coordonnées décimales)
+            parsed = parse_exiftool_decimal_pipe(raw)
+            if parsed:
+                lat, lon, lat_has_ref, lon_has_ref = parsed
+            else:
+                # Fallback : DMS classique (exiftool -p "$GPSLatitude, $GPSLongitude")
+                lat, lon, lat_has_ref, lon_has_ref = parse_dms(raw)
+
+    except (ValueError, FileNotFoundError, RuntimeError) as e:
         print(f"  {C.RED}[ERROR]{C.RESET} {e}\n")
         sys.exit(1)
 
-    # Apply explicit hemisphere flags
+    # ── Appliquer les flags de référence explicites ────────────────────────
     if args.lat_ref:
         lat = -abs(lat) if args.lat_ref.upper() == "S" else +abs(lat)
         lat_has_ref = True
