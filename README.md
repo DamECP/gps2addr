@@ -18,12 +18,16 @@
 
 ### What it does
 
-`gps2addr` takes a GPS coordinate in **DMS format** (Degrees, Minutes, Seconds) — the format output by tools like **ExifTool** — and returns the corresponding human-readable address using the [OpenStreetMap Nominatim API](https://nominatim.org/).
+`gps2addr` takes a GPS coordinate — from an **image file**, a **DMS string**, or **decimal values** — and returns the corresponding human-readable address using the [OpenStreetMap Nominatim API](https://nominatim.org/).
+
+The simplest usage is to pass an image directly: the script calls `exiftool` internally, reads GPS coordinates in decimal (no special characters), and resolves the address in one step.
 
 If the coordinate is ambiguous (missing N/S or E/W hemisphere reference, which happens when EXIF metadata is incomplete), the tool automatically queries **all 4 possible locations** and displays them side by side with color coding, so you can identify the correct one from context.
 
 ### Features
 
+- ✅ **Pass an image file directly** — `exiftool` is called internally, no manual copy-paste
+- ✅ Accepts `exiftool -n` pipe output (decimal coordinates — no special characters)
 - ✅ Parses DMS format as output by ExifTool (`26 deg 12' 14.76", 28 deg 2' 50.28"`)
 - ✅ Handles missing hemisphere references with an **ambiguity mode** (4 hypotheses displayed)
 - ✅ Parallel geocoding of all 4 quadrants for fast results
@@ -32,13 +36,14 @@ If the coordinate is ambiguous (missing N/S or E/W hemisphere reference, which h
 - ✅ Accepts decimal coordinates (`--lat` / `--lon`)
 - ✅ Pipe-friendly (works with ExifTool output directly)
 - ✅ Raw JSON output mode (`--json`)
-- ✅ No external dependencies — pure Python 3 stdlib only
+- ✅ No external dependencies — pure Python 3 stdlib only (requires `exiftool` for image mode)
 - ✅ No API key required
 
 ### Requirements
 
 - Python 3.10+
 - Internet access (calls the Nominatim public API)
+- `exiftool` — only needed when passing an image file directly (`sudo apt install exiftool`)
 
 ### Installation
 
@@ -52,6 +57,15 @@ chmod +x gps2addr.py
 ### Usage
 
 ```bash
+# Pass an image directly — the easiest way
+python3 gps2addr.py photo.jpg
+
+# Pipe from ExifTool in decimal mode (no special characters)
+exiftool -n -GPSLatitude -GPSLongitude photo.jpg | python3 gps2addr.py
+
+# Pipe from ExifTool in DMS mode (classic)
+exiftool -p '$GPSLatitude, $GPSLongitude' photo.jpg | python3 gps2addr.py
+
 # Basic DMS string (ambiguous — no N/S/E/W)
 python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\""
 
@@ -64,24 +78,33 @@ python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --lat-ref S --lon-re
 # Decimal degrees
 python3 gps2addr.py --lat 26.2041 --lon 28.0473 --lat-ref S --lon-ref E
 
-# Pipe directly from ExifTool
-exiftool -p '$GPSLatitude, $GPSLongitude' photo.jpg | python3 gps2addr.py
-
 # Raw JSON response
-python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --json
+python3 gps2addr.py photo.jpg --json
 
 # Disable colors (for logging or non-TTY output)
-python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --no-color
+python3 gps2addr.py photo.jpg --no-color
 
 # Change output language
-python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --lang fr
+python3 gps2addr.py photo.jpg --lang fr
 ```
+
+### Input priority
+
+The script resolves input in this order:
+
+| Priority | Source | How |
+|---|---|---|
+| 1 | `--lat` / `--lon` flags | Explicit decimal values |
+| 2 | Positional argument — **image file** | `exiftool -n` called internally |
+| 2 | Positional argument — **DMS string** | Parsed directly |
+| 3 | stdin — decimal (`exiftool -n` pipe) | Auto-detected |
+| 3 | stdin — DMS string | Fallback parser |
 
 ### Options
 
 | Option | Description |
 |---|---|
-| `coords` | DMS coordinate string (positional argument) |
+| `coords` | Image file path, DMS coordinate string, or omit to read stdin |
 | `--lat` | Latitude in decimal degrees |
 | `--lon` | Longitude in decimal degrees |
 | `--lat-ref N\|S` | Force North or South hemisphere |
@@ -115,6 +138,8 @@ In ambiguity mode, each quadrant has its own color for quick visual scanning:
 When a photo is edited by certain apps (social media, photo editors), the EXIF metadata fields `GPS Latitude Ref` and `GPS Longitude Ref` (which carry the N/S and E/W indicators) are stripped or never written. What remains are only the **absolute values** of latitude and longitude — which map to 4 different points on Earth.
 
 `gps2addr` detects this situation automatically and presents all 4 hypotheses, letting you use the photo's visual context (landscape, architecture, vegetation, language on signs) to identify the correct location.
+
+> **Note:** When using the direct image mode (`python3 gps2addr.py photo.jpg`), the script reads `GPSLatitudeRef` and `GPSLongitudeRef` alongside the coordinates, so hemisphere ambiguity is usually resolved automatically.
 
 ### Example output — ambiguous coordinates
 
@@ -157,12 +182,16 @@ This tool uses the [Nominatim API](https://nominatim.org/) provided by OpenStree
 
 ### Ce que ça fait
 
-`gps2addr` prend une coordonnée GPS au **format DMS** (Degrés, Minutes, Secondes) — le format utilisé par des outils comme **ExifTool** — et retourne l'adresse postale correspondante via l'[API Nominatim d'OpenStreetMap](https://nominatim.org/).
+`gps2addr` prend une coordonnée GPS — depuis un **fichier image**, une **chaîne DMS**, ou des **valeurs décimales** — et retourne l'adresse postale correspondante via l'[API Nominatim d'OpenStreetMap](https://nominatim.org/).
+
+L'utilisation la plus simple consiste à passer directement une image : le script appelle `exiftool` en interne, lit les coordonnées GPS en décimal (sans caractères spéciaux), et résout l'adresse en une seule commande.
 
 Si la coordonnée est ambiguë (absence de référence N/S ou E/W, ce qui arrive quand les métadonnées EXIF sont incomplètes), l'outil interroge automatiquement les **4 localisations possibles** et les affiche côte à côte avec un code couleur, pour que vous puissiez identifier la bonne en vous aidant du contexte de la photo.
 
 ### Fonctionnalités
 
+- ✅ **Passer directement un fichier image** — `exiftool` est appelé en interne, aucun copier-coller
+- ✅ Accepte la sortie de `exiftool -n` en pipe (coordonnées décimales — sans caractères spéciaux)
 - ✅ Analyse le format DMS tel que produit par ExifTool (`26 deg 12' 14.76", 28 deg 2' 50.28"`)
 - ✅ Gère les références d'hémisphère manquantes avec un **mode ambiguïté** (4 hypothèses affichées)
 - ✅ Géocodage parallèle des 4 quadrants pour un résultat rapide
@@ -171,13 +200,14 @@ Si la coordonnée est ambiguë (absence de référence N/S ou E/W, ce qui arrive
 - ✅ Accepte des coordonnées décimales (`--lat` / `--lon`)
 - ✅ Compatible avec les pipes (fonctionne directement avec la sortie d'ExifTool)
 - ✅ Mode sortie JSON brut (`--json`)
-- ✅ Aucune dépendance externe — Python 3 stdlib uniquement
+- ✅ Aucune dépendance externe — Python 3 stdlib uniquement (requiert `exiftool` pour le mode image)
 - ✅ Aucune clé API requise
 
 ### Prérequis
 
 - Python 3.10+
 - Accès internet (appels à l'API publique Nominatim)
+- `exiftool` — uniquement nécessaire pour passer un fichier image directement (`sudo apt install exiftool`)
 
 ### Installation
 
@@ -191,6 +221,15 @@ chmod +x gps2addr.py
 ### Utilisation
 
 ```bash
+# Passer directement une image — la méthode la plus simple
+python3 gps2addr.py photo.jpg
+
+# Pipe depuis ExifTool en mode décimal (sans caractères spéciaux)
+exiftool -n -GPSLatitude -GPSLongitude photo.jpg | python3 gps2addr.py
+
+# Pipe depuis ExifTool en mode DMS (classique)
+exiftool -p '$GPSLatitude, $GPSLongitude' photo.jpg | python3 gps2addr.py
+
 # Chaîne DMS basique (ambiguë — sans N/S/E/W)
 python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\""
 
@@ -203,24 +242,33 @@ python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --lat-ref S --lon-re
 # Degrés décimaux
 python3 gps2addr.py --lat 26.2041 --lon 28.0473 --lat-ref S --lon-ref E
 
-# Pipe directement depuis ExifTool
-exiftool -p '$GPSLatitude, $GPSLongitude' photo.jpg | python3 gps2addr.py
-
 # Réponse JSON brute
-python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --json
+python3 gps2addr.py photo.jpg --json
 
 # Désactiver les couleurs (pour les logs ou sorties non-TTY)
-python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --no-color
+python3 gps2addr.py photo.jpg --no-color
 
 # Changer la langue de sortie
-python3 gps2addr.py "26 deg 12' 14.76\", 28 deg 2' 50.28\"" --lang fr
+python3 gps2addr.py photo.jpg --lang fr
 ```
+
+### Priorité des entrées
+
+Le script résout l'entrée dans cet ordre :
+
+| Priorité | Source | Comment |
+|---|---|---|
+| 1 | Flags `--lat` / `--lon` | Valeurs décimales explicites |
+| 2 | Argument positionnel — **fichier image** | `exiftool -n` appelé en interne |
+| 2 | Argument positionnel — **chaîne DMS** | Parsé directement |
+| 3 | stdin — décimal (pipe `exiftool -n`) | Détection automatique |
+| 3 | stdin — chaîne DMS | Parser de fallback |
 
 ### Options
 
 | Option | Description |
 |---|---|
-| `coords` | Chaîne de coordonnées DMS (argument positionnel) |
+| `coords` | Chemin d'un fichier image, chaîne DMS, ou omis pour lire stdin |
 | `--lat` | Latitude en degrés décimaux |
 | `--lon` | Longitude en degrés décimaux |
 | `--lat-ref N\|S` | Forcer l'hémisphère Nord ou Sud |
@@ -254,6 +302,8 @@ En mode ambiguïté, chaque quadrant a sa propre couleur pour une lecture rapide
 Quand une photo est éditée par certaines applications (réseaux sociaux, éditeurs photo), les champs EXIF `GPS Latitude Ref` et `GPS Longitude Ref` (qui indiquent N/S et E/W) sont supprimés ou jamais écrits. Il ne reste que les **valeurs absolues** de latitude et longitude — qui correspondent à 4 points différents sur le globe.
 
 `gps2addr` détecte cette situation automatiquement et présente les 4 hypothèses, vous laissant utiliser le contexte visuel de la photo (paysage, architecture, végétation, langue des enseignes) pour identifier le bon emplacement.
+
+> **Note :** En mode image direct (`python3 gps2addr.py photo.jpg`), le script lit également `GPSLatitudeRef` et `GPSLongitudeRef`, donc l'ambiguïté d'hémisphère est généralement résolue automatiquement.
 
 ### API & confidentialité
 
